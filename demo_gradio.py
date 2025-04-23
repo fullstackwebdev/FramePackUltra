@@ -46,16 +46,87 @@ high_vram = free_mem_gb > 60
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
 
-text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
-text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
-tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
-tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
 
-feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
-image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
+###########################################################
+###########################################################
+###########################################################
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
+
+
+
+# Set the path to your models directory - adjust as needed
+MODELS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), './models'))
+
+# Set environment variables for offline mode
+os.environ['HF_HOME'] = MODELS_DIR
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# Later in your code, replace the model loading section with:
+
+# Define local model paths
+hunyuan_path = os.path.join(MODELS_DIR, 'hunyuanvideo-community/HunyuanVideo')
+flux_path = os.path.join(MODELS_DIR, 'lllyasviel/flux_redux_bfl')
+framepack_path = os.path.join(MODELS_DIR, 'lllyasviel/FramePackI2V_HY')
+
+# Load models from local paths
+text_encoder = LlamaModel.from_pretrained(
+    hunyuan_path, 
+    subfolder='text_encoder', 
+    torch_dtype=torch.float16,
+    local_files_only=True
+).cpu()
+
+text_encoder_2 = CLIPTextModel.from_pretrained(
+    hunyuan_path, 
+    subfolder='text_encoder_2', 
+    torch_dtype=torch.float16,
+    local_files_only=True
+).cpu()
+
+tokenizer = LlamaTokenizerFast.from_pretrained(
+    hunyuan_path, 
+    subfolder='tokenizer',
+    local_files_only=True
+)
+
+tokenizer_2 = CLIPTokenizer.from_pretrained(
+    hunyuan_path, 
+    subfolder='tokenizer_2',
+    local_files_only=True
+)
+
+vae = AutoencoderKLHunyuanVideo.from_pretrained(
+    hunyuan_path, 
+    subfolder='vae', 
+    torch_dtype=torch.float16,
+    local_files_only=True
+).cpu()
+
+feature_extractor = SiglipImageProcessor.from_pretrained(
+    flux_path, 
+    subfolder='feature_extractor',
+    local_files_only=True
+)
+
+image_encoder = SiglipVisionModel.from_pretrained(
+    flux_path, 
+    subfolder='image_encoder', 
+    torch_dtype=torch.float16,
+    local_files_only=True
+).cpu()
+
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
+    framepack_path, 
+    torch_dtype=torch.bfloat16,
+    local_files_only=True
+).cpu()
+
+
+
+
+############################
+
 
 vae.eval()
 text_encoder.eval()
