@@ -54,75 +54,64 @@ print(f'High-VRAM Mode: {high_vram}')
 
 
 
-# Set the path to your models directory - adjust as needed
-MODELS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), './models'))
+# Define model paths
+hunyuan_path = os.path.join(MODELS_DIR, "hunyuanvideo-community", "HunyuanVideo")
+flux_path = os.path.join(MODELS_DIR, "lllyasviel", "flux_redux_bfl")
+framepack_path = os.path.join(MODELS_DIR, "lllyasviel", "FramePackI2V_HY")
 
-# Set environment variables for offline mode
-os.environ['HF_HOME'] = MODELS_DIR
-os.environ['HF_HUB_OFFLINE'] = '1'
-os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-
-# Later in your code, replace the model loading section with:
-
-# Define local model paths
-hunyuan_path = os.path.join(MODELS_DIR, 'hunyuanvideo-community/HunyuanVideo')
-flux_path = os.path.join(MODELS_DIR, 'lllyasviel/flux_redux_bfl')
-framepack_path = os.path.join(MODELS_DIR, 'lllyasviel/FramePackI2V_HY')
-
-# Load models from local paths
+print(f"Loading text_encoder from: {os.path.join(hunyuan_path, 'text_encoder')}")
+# Load models from local paths - with trusted_patterns to avoid repo_id issues
 text_encoder = LlamaModel.from_pretrained(
-    hunyuan_path, 
-    subfolder='text_encoder', 
-    torch_dtype=torch.float16,
-    local_files_only=True
+    os.path.join(hunyuan_path, "text_encoder"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
 ).cpu()
 
+print(f"Loading text_encoder_2 from: {os.path.join(hunyuan_path, 'text_encoder_2')}")
 text_encoder_2 = CLIPTextModel.from_pretrained(
-    hunyuan_path, 
-    subfolder='text_encoder_2', 
-    torch_dtype=torch.float16,
-    local_files_only=True
+    os.path.join(hunyuan_path, "text_encoder_2"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
 ).cpu()
 
+print(f"Loading tokenizer from: {os.path.join(hunyuan_path, 'tokenizer')}")
 tokenizer = LlamaTokenizerFast.from_pretrained(
-    hunyuan_path, 
-    subfolder='tokenizer',
-    local_files_only=True
+    os.path.join(hunyuan_path, "tokenizer"),
+    trust_remote_code=True
 )
 
+print(f"Loading tokenizer_2 from: {os.path.join(hunyuan_path, 'tokenizer_2')}")
 tokenizer_2 = CLIPTokenizer.from_pretrained(
-    hunyuan_path, 
-    subfolder='tokenizer_2',
-    local_files_only=True
+    os.path.join(hunyuan_path, "tokenizer_2"),
+    trust_remote_code=True
 )
 
+print(f"Loading vae from: {os.path.join(hunyuan_path, 'vae')}")
 vae = AutoencoderKLHunyuanVideo.from_pretrained(
-    hunyuan_path, 
-    subfolder='vae', 
-    torch_dtype=torch.float16,
-    local_files_only=True
+    os.path.join(hunyuan_path, "vae"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
 ).cpu()
 
+print(f"Loading feature_extractor from: {os.path.join(flux_path, 'feature_extractor')}")
 feature_extractor = SiglipImageProcessor.from_pretrained(
-    flux_path, 
-    subfolder='feature_extractor',
-    local_files_only=True
+    os.path.join(flux_path, "feature_extractor"),
+    trust_remote_code=True
 )
 
+print(f"Loading image_encoder from: {os.path.join(flux_path, 'image_encoder')}")
 image_encoder = SiglipVisionModel.from_pretrained(
-    flux_path, 
-    subfolder='image_encoder', 
-    torch_dtype=torch.float16,
-    local_files_only=True
+    os.path.join(flux_path, "image_encoder"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
 ).cpu()
 
+print(f"Loading transformer from: {framepack_path}")
 transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
-    framepack_path, 
-    torch_dtype=torch.bfloat16,
-    local_files_only=True
+    framepack_path,
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16
 ).cpu()
-
-
 
 
 ############################
