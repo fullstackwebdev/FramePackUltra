@@ -51,7 +51,8 @@ print(f'High-VRAM Mode: {high_vram}')
 ###########################################################
 ###########################################################
 
-
+MODELS_DIR = "/workspace/models"
+os.environ['HF_HOME'] = MODELS_DIR
 
 
 # Define model paths
