@@ -540,7 +540,7 @@ with block:
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
             # Add LoRA inputs
-            with gr.Group(label="LoRA Settings"):
+            with gr.Group():
                 # Get LoRA files from directory for dropdown
                 lora_names, lora_paths = get_lora_files()
                 lora_dropdown = gr.Dropdown(
