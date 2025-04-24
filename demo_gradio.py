@@ -5,6 +5,14 @@ import glob
 import requests
 from urllib.parse import urlparse
 
+# Define additional LoRA directories to scan here
+LORA_DIRS = [
+    # LORA_DIR,  # Primary directory
+    "/workspace/lora",
+    "./lora",  # Local directory as fallback
+    # Add more directories as needed
+]
+
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
 import gradio as gr
@@ -55,15 +63,39 @@ print(f'High-VRAM Mode: {high_vram}')
 
 
 def get_lora_files():
-    """Get all .safetensors files in the ./lora directory"""
-    lora_dir = os.path.join(os.getcwd(), 'lora')
-    os.makedirs(lora_dir, exist_ok=True)  # Create directory if it doesn't exist
-    safetensor_files = glob.glob(os.path.join(lora_dir, '*.safetensors'))
+    """Get all .safetensors files in the configured LoRA directories"""
+    lora_files = []
+    lora_paths = []
+    
+    # Scan all directories in LORA_DIRS
+    for lora_dir in LORA_DIRS:
+        # Create directory if it doesn't exist
+        os.makedirs(lora_dir, exist_ok=True)
+        
+        # Find all .safetensors files in this directory
+        safetensor_files = glob.glob(os.path.join(lora_dir, '*.safetensors'))
+        
+        # Add filenames and paths to our lists
+        for file_path in safetensor_files:
+            filename = os.path.basename(file_path)
+            if filename not in lora_files:  # Avoid duplicates
+                lora_files.append(filename)
+                lora_paths.append(file_path)
+    
+    if not lora_files:
+        print(f"No .safetensors files found in any of the LoRA directories: {LORA_DIRS}")
+    else:
+        print(f"Found {len(lora_files)} LoRA files in directories: {LORA_DIRS}")
+        
     # Return list of files with just filenames for display but full paths as values
-    return [os.path.basename(f) for f in safetensor_files], safetensor_files
+    return lora_files, lora_paths
 
-def download_lora_from_url(url, download_dir='./downloaded_loras'):
+def download_lora_from_url(url, download_dir=None):
     """Download a LoRA file from a URL and save it locally."""
+    # Use the primary LoRA directory if no download_dir specified
+    if download_dir is None:
+        download_dir = LORA_DIRS[0] if LORA_DIRS else './lora_downloads'
+        
     os.makedirs(download_dir, exist_ok=True)
     
     # Extract filename from URL
@@ -225,8 +257,19 @@ if args.lora_url:
     transformer = load_lora(transformer, lora_path, lora_name, args.lora_is_diffusers)
 elif args.lora:
     lora = args.lora
+    # If just a filename was provided, check in all LoRA directories
+    if os.path.dirname(lora) == "":
+        found = False
+        for dir_path in LORA_DIRS:
+            full_path = os.path.join(dir_path, lora)
+            if os.path.exists(full_path):
+                lora = full_path
+                found = True
+                break
+        if not found:
+            print(f"Warning: LoRA file {lora} not found in any of the LoRA directories")
     lora_path, lora_name = os.path.split(lora)
-    print(f"Loading local LoRA: {lora_name}")
+    print(f"Loading local LoRA: {lora_name} from {lora_path}")
     transformer = load_lora(transformer, lora_path, lora_name, args.lora_is_diffusers)
 
 if not high_vram:
@@ -481,9 +524,12 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         for path in lora_paths:
             if os.path.basename(path) == lora_dropdown:
                 selected_lora_file = path
+                print(f"Selected LoRA from dropdown: {selected_lora_file}")
                 break
     else:
         selected_lora_file = lora_file
+        if selected_lora_file:
+            print(f"Using uploaded LoRA: {selected_lora_file}")
 
     # Display a message about LoRA usage
     lora_message = ""
@@ -492,6 +538,8 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
         lora_message = f"Using LoRA: {lora_name}"
     elif lora_url and lora_url.strip():
         lora_message = f"Using LoRA from URL: {lora_url}"
+    else:
+        lora_message = "No LoRA selected"
 
     yield None, None, lora_message, '', gr.update(interactive=False), gr.update(interactive=True)
 
@@ -540,12 +588,13 @@ with block:
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
             # Add LoRA inputs
+            gr.Markdown("## LoRA Settings")
             with gr.Group():
-                # Get LoRA files from directory for dropdown
+                # Get LoRA files from configured directories
                 lora_names, lora_paths = get_lora_files()
                 lora_dropdown = gr.Dropdown(
-                    label="Select LoRA from ./lora directory", 
-                    choices=lora_names if lora_names else ["No .safetensors files found in ./lora"],
+                    label=f"Select LoRA from {', '.join(LORA_DIRS)}", 
+                    choices=lora_names if lora_names else ["No .safetensors files found in LoRA directories"],
                     value=None,
                     type="value"
                 )
