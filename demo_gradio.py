@@ -1171,6 +1171,7 @@ with block:
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
     # Modify process function to collect LoRA weights
+        # Modify process function to collect LoRA weights
     def process_with_loras(*args):
         # Extract standard parameters
         standard_args = args[:16]  # The first 16 arguments
@@ -1193,8 +1194,9 @@ with block:
                     if lora_path:
                         lora_weights.append((lora_path, lora_sliders[lora_name].value))
         
-        # Call the original process function with all parameters
-        return process(*standard_args, lora_weights)
+        # Call the original process function and yield its values
+        for result in process(*standard_args, lora_weights):
+            yield result
     
     # Basic input parameters
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, 
