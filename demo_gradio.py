@@ -28,7 +28,7 @@ from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_pro
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
-from diffusers_helper.lora_utils import load_lora
+from diffusers_helper.load_lora import load_lora
 
 
 parser = argparse.ArgumentParser()
@@ -61,19 +61,26 @@ def download_lora_from_url(url, download_dir='./downloaded_loras'):
     parsed_url = urlparse(url)
     filename = os.path.basename(parsed_url.path)
     
-    if not filename:
-        # If URL doesn't have a clear filename, create one
+    if not filename or filename.find('.') == -1:
+        # If URL doesn't have a clear filename with extension, create one
         filename = f"lora_from_url_{generate_timestamp()}.safetensors"
     
     local_path = os.path.join(download_dir, filename)
     
     print(f"Downloading LoRA from {url} to {local_path}...")
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True, timeout=60)
     response.raise_for_status()  # Raise an exception for HTTP errors
+    
+    total_size = int(response.headers.get('content-length', 0))
+    downloaded_size = 0
     
     with open(local_path, 'wb') as f:
         for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
+            if chunk:
+                f.write(chunk)
+                downloaded_size += len(chunk)
+                if total_size > 0:
+                    print(f"Download progress: {downloaded_size/total_size*100:.1f}%")
     
     print(f"LoRA file downloaded successfully to {local_path}")
     return local_path
@@ -88,13 +95,18 @@ def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_dif
             print(f"Error downloading LoRA from URL: {e}")
             return transformer_model
     
-    if lora_file and lora_file.strip():
+    if lora_file:
         try:
+            # Handle potential empty string vs None difference
+            if isinstance(lora_file, str) and not lora_file.strip():
+                return transformer_model
+                
             lora_path, lora_name = os.path.split(lora_file)
             print(f"Loading LoRA: {lora_name}")
             return load_lora(transformer_model, lora_path, lora_name, is_diffusers_format)
         except Exception as e:
             print(f"Error loading LoRA: {e}")
+            traceback.print_exc()
     
     return transformer_model
 
@@ -228,7 +240,8 @@ os.makedirs(outputs_folder, exist_ok=True)
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers):
     # Apply LoRA if specified
-    if (lora_file and lora_file.strip()) or (lora_url and lora_url.strip()):
+    if lora_file or (lora_url and lora_url.strip()):
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Loading LoRA ...'))))
         temp_transformer = apply_lora_to_model(transformer, lora_file, lora_url, lora_is_diffusers)
     else:
         temp_transformer = transformer
@@ -451,7 +464,15 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    # Display a message about LoRA usage
+    lora_message = ""
+    if lora_file:
+        lora_name = os.path.basename(lora_file)
+        lora_message = f"Using LoRA: {lora_name}"
+    elif lora_url and lora_url.strip():
+        lora_message = f"Using LoRA from URL: {lora_url}"
+
+    yield None, None, lora_message, '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
 
@@ -499,8 +520,8 @@ with block:
 
             # Add LoRA inputs
             with gr.Group(label="LoRA Settings"):
-                lora_file = gr.Textbox(label="LoRA File Path", value="", info="Local path to LoRA file")
-                lora_url = gr.Textbox(label="LoRA URL", value="", info="URL to download LoRA file")
+                lora_file = gr.File(label="LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath", info="Upload a LoRA file")
+                lora_url = gr.Textbox(label="LoRA URL", value="", info="Alternatively, provide a URL to download LoRA file")
                 lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
 
             with gr.Row():
@@ -531,11 +552,13 @@ with block:
             gr.Markdown('Note that the ending actions will be generated before the starting actions due to the inverted sampling. If the starting action is not in the video, you just need to wait, and it will be generated later.')
             progress_desc = gr.Markdown('', elem_classes='no-generating-animation')
             progress_bar = gr.HTML('', elem_classes='no-generating-animation')
+            gr.Markdown('### LoRA Status')
+            lora_status = gr.Markdown('')
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers]
-    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
+    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
 
