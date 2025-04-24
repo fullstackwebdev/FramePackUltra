@@ -1189,16 +1189,19 @@ with block:
         gpu_memory_preservation = args[10]
         use_teacache = args[11]
         mp4_crf = args[12]
-        selected_loras = args[13]  # Already the list of values
-        lora_file = args[14]  # Already the value
-        lora_url = args[15]   # Already the value
+        selected_loras = args[13]  
+        lora_file = args[14]  
+        lora_url = args[15]   
         
         # Get weight values for selected LoRAs
-        lora_weights = []
+        lora_values = []
         if selected_loras:
             for lora_name in selected_loras:
                 if lora_name in lora_sliders:
-                    # Get actual full path for this lora file
+                    # Get the value from the slider component
+                    slider_value = lora_sliders[lora_name].value
+                    
+                    # Find the full path for this lora file
                     lora_path = None
                     for path in lora_paths:
                         if os.path.basename(path) == lora_name:
@@ -1206,9 +1209,14 @@ with block:
                             break
                     
                     if lora_path:
-                        # Get the value from the slider component
-                        slider_value = lora_sliders[lora_name].value
-                        lora_weights.append((lora_path, slider_value))
+                        lora_values.append(lora_path)
+                        lora_values.append(slider_value)
+        
+        # Call the original process function with all parameters - note the * to unpack lora_values
+        for result in process(input_image, prompt, n_prompt, seed, total_second_length, 
+                            latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, 
+                            use_teacache, mp4_crf, *lora_values):
+            yield result
         
         # Call the original process function with all parameters
         for result in process(input_image, prompt, n_prompt, seed, total_second_length, 
