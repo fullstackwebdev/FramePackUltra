@@ -47,7 +47,8 @@ parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
 parser.add_argument("--lora", type=str, default=None, help="Path to Lora file")
 parser.add_argument("--lora_url", type=str, default=None, help="URL to download Lora file")
-parser.add_argument("--lora_is_diffusers", action='store_true', help="Whether the LoRA is in diffusers format")
+# Remove the diffusers format argument as it's not used by the actual load_lora function
+# parser.add_argument("--lora_is_diffusers", action='store_true', help="Whether the LoRA is in diffusers format")
 args = parser.parse_args()
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
@@ -94,7 +95,7 @@ def download_lora_from_url(url, download_dir=None):
     """Download a LoRA file from a URL and save it locally."""
     # Use the primary LoRA directory if no download_dir specified
     if download_dir is None:
-        download_dir = LORA_DIRS[0] if LORA_DIRS else './lora_downloads'
+        download_dir = LORA_DIR
         
     os.makedirs(download_dir, exist_ok=True)
     
