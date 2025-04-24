@@ -1,6 +1,7 @@
 from diffusers_helper.hf_login import login
 
 import os
+import glob
 import requests
 from urllib.parse import urlparse
 
@@ -52,6 +53,14 @@ high_vram = free_mem_gb > 60
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
 
+
+def get_lora_files():
+    """Get all .safetensors files in the ./lora directory"""
+    lora_dir = os.path.join(os.getcwd(), 'lora')
+    os.makedirs(lora_dir, exist_ok=True)  # Create directory if it doesn't exist
+    safetensor_files = glob.glob(os.path.join(lora_dir, '*.safetensors'))
+    # Return list of files with just filenames for display but full paths as values
+    return [os.path.basename(f) for f in safetensor_files], safetensor_files
 
 def download_lora_from_url(url, download_dir='./downloaded_loras'):
     """Download a LoRA file from a URL and save it locally."""
@@ -460,14 +469,26 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url, lora_is_diffusers):
     global stream
     assert input_image is not None, 'No input image!'
 
+    # Handle LoRA selection from dropdown
+    selected_lora_file = None
+    if lora_dropdown:
+        # Find the corresponding full path
+        _, lora_paths = get_lora_files()
+        for path in lora_paths:
+            if os.path.basename(path) == lora_dropdown:
+                selected_lora_file = path
+                break
+    else:
+        selected_lora_file = lora_file
+
     # Display a message about LoRA usage
     lora_message = ""
-    if lora_file:
-        lora_name = os.path.basename(lora_file)
+    if selected_lora_file:
+        lora_name = os.path.basename(selected_lora_file)
         lora_message = f"Using LoRA: {lora_name}"
     elif lora_url and lora_url.strip():
         lora_message = f"Using LoRA from URL: {lora_url}"
@@ -476,7 +497,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, selected_lora_file, lora_url, lora_is_diffusers)
 
     output_filename = None
 
@@ -519,12 +540,20 @@ with block:
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
             # Add LoRA inputs
-            gr.Markdown("### LoRA Settings")
-            with gr.Group():
-                lora_file = gr.File(label="LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath")
-                lora_url = gr.Textbox(label="LoRA URL", value="", info="Alternatively, provide a URL to download LoRA file")
+            with gr.Group(label="LoRA Settings"):
+                # Get LoRA files from directory for dropdown
+                lora_names, lora_paths = get_lora_files()
+                lora_dropdown = gr.Dropdown(
+                    label="Select LoRA from ./lora directory", 
+                    choices=lora_names if lora_names else ["No .safetensors files found in ./lora"],
+                    value=None,
+                    type="value"
+                )
+                
+                lora_file = gr.File(label="Or upload a LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath")
+                gr.Markdown("Alternatively, provide a URL to download a LoRA file")
+                lora_url = gr.Textbox(label="LoRA URL", value="")
                 lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
-
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
@@ -559,7 +588,7 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url, lora_is_diffusers]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
