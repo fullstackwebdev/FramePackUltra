@@ -1188,9 +1188,9 @@ with block:
         gpu_memory_preservation = args[10]
         use_teacache = args[11]
         mp4_crf = args[12]
-        selected_loras = args[13]  # lora_dropdown value
-        lora_file = args[14]
-        lora_url = args[15]
+        selected_loras = args[13].value  # lora_dropdown value
+        lora_file = args[14].value
+        lora_url = args[15].value
         
         # Get weight values for selected LoRAs
         lora_weights = []
