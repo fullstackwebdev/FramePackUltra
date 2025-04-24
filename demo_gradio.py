@@ -1173,8 +1173,9 @@ with block:
     # Modify process function to collect LoRA weights
         # Modify process function to collect LoRA weights
     # Modify process function to collect LoRA weights
+    # Modify process function to collect LoRA weights
     def process_with_loras(*args):
-        # Extract standard parameters - get the values, not the components
+        # Extract standard parameters
         input_image = args[0]
         prompt = args[1] 
         n_prompt = args[2]
@@ -1188,9 +1189,9 @@ with block:
         gpu_memory_preservation = args[10]
         use_teacache = args[11]
         mp4_crf = args[12]
-        selected_loras = args[13].value  # lora_dropdown value
-        lora_file = args[14].value
-        lora_url = args[15].value
+        selected_loras = args[13]  # Already the list of values
+        lora_file = args[14]  # Already the value
+        lora_url = args[15]   # Already the value
         
         # Get weight values for selected LoRAs
         lora_weights = []
