@@ -1172,12 +1172,25 @@ with block:
 
     # Modify process function to collect LoRA weights
         # Modify process function to collect LoRA weights
+    # Modify process function to collect LoRA weights
     def process_with_loras(*args):
-        # Extract standard parameters
-        standard_args = args[:16]  # The first 16 arguments
-        
-        # Get selected LoRAs from the dropdown
+        # Extract standard parameters - get the values, not the components
+        input_image = args[0]
+        prompt = args[1] 
+        n_prompt = args[2]
+        seed = args[3]
+        total_second_length = args[4]
+        latent_window_size = args[5]
+        steps = args[6]
+        cfg = args[7]
+        gs = args[8]
+        rs = args[9]
+        gpu_memory_preservation = args[10]
+        use_teacache = args[11]
+        mp4_crf = args[12]
         selected_loras = args[13]  # lora_dropdown value
+        lora_file = args[14]
+        lora_url = args[15]
         
         # Get weight values for selected LoRAs
         lora_weights = []
@@ -1192,10 +1205,14 @@ with block:
                             break
                     
                     if lora_path:
-                        lora_weights.append((lora_path, lora_sliders[lora_name].value))
+                        # Get the value from the slider component
+                        slider_value = lora_sliders[lora_name].value
+                        lora_weights.append((lora_path, slider_value))
         
-        # Call the original process function and yield its values
-        for result in process(*standard_args, lora_weights):
+        # Call the original process function with all parameters
+        for result in process(input_image, prompt, n_prompt, seed, total_second_length, 
+                            latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, 
+                            use_teacache, mp4_crf, lora_file, lora_url, lora_weights):
             yield result
     
     # Basic input parameters
