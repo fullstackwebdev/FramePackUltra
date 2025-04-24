@@ -521,7 +521,7 @@ with block:
             # Add LoRA inputs
             gr.Markdown("### LoRA Settings")
             with gr.Group():
-                lora_file = gr.File(label="LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath", info="Upload a LoRA file")
+                lora_file = gr.File(label="LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath")
                 lora_url = gr.Textbox(label="LoRA URL", value="", info="Alternatively, provide a URL to download LoRA file")
                 lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
 
