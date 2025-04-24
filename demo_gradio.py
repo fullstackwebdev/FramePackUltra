@@ -1,6 +1,8 @@
 from diffusers_helper.hf_login import login
 
 import os
+import requests
+from urllib.parse import urlparse
 
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
@@ -26,6 +28,7 @@ from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_pro
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
+from diffusers_helper.lora_utils import load_lora
 
 
 parser = argparse.ArgumentParser()
@@ -33,6 +36,9 @@ parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
+parser.add_argument("--lora", type=str, default=None, help="Path to Lora file")
+parser.add_argument("--lora_url", type=str, default=None, help="URL to download Lora file")
+parser.add_argument("--lora_is_diffusers", action='store_true', help="Whether the LoRA is in diffusers format")
 args = parser.parse_args()
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
@@ -45,6 +51,52 @@ high_vram = free_mem_gb > 60
 
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
+
+
+def download_lora_from_url(url, download_dir='./downloaded_loras'):
+    """Download a LoRA file from a URL and save it locally."""
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # Extract filename from URL
+    parsed_url = urlparse(url)
+    filename = os.path.basename(parsed_url.path)
+    
+    if not filename:
+        # If URL doesn't have a clear filename, create one
+        filename = f"lora_from_url_{generate_timestamp()}.safetensors"
+    
+    local_path = os.path.join(download_dir, filename)
+    
+    print(f"Downloading LoRA from {url} to {local_path}...")
+    response = requests.get(url, stream=True)
+    response.raise_for_status()  # Raise an exception for HTTP errors
+    
+    with open(local_path, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    
+    print(f"LoRA file downloaded successfully to {local_path}")
+    return local_path
+
+
+def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_diffusers_format=False):
+    """Apply LoRA to transformer model from file or URL"""
+    if lora_url and lora_url.strip():
+        try:
+            lora_file = download_lora_from_url(lora_url)
+        except Exception as e:
+            print(f"Error downloading LoRA from URL: {e}")
+            return transformer_model
+    
+    if lora_file and lora_file.strip():
+        try:
+            lora_path, lora_name = os.path.split(lora_file)
+            print(f"Loading LoRA: {lora_name}")
+            return load_lora(transformer_model, lora_path, lora_name, is_diffusers_format)
+        except Exception as e:
+            print(f"Error loading LoRA: {e}")
+    
+    return transformer_model
 
 
 ###########################################################
@@ -143,6 +195,19 @@ text_encoder_2.requires_grad_(False)
 image_encoder.requires_grad_(False)
 transformer.requires_grad_(False)
 
+# Apply LoRA if specified via command line
+lora_path = None
+if args.lora_url:
+    lora_file = download_lora_from_url(args.lora_url)
+    lora_path, lora_name = os.path.split(lora_file)
+    print(f"Using downloaded LoRA: {lora_name}")
+    transformer = load_lora(transformer, lora_path, lora_name, args.lora_is_diffusers)
+elif args.lora:
+    lora = args.lora
+    lora_path, lora_name = os.path.split(lora)
+    print(f"Loading local LoRA: {lora_name}")
+    transformer = load_lora(transformer, lora_path, lora_name, args.lora_is_diffusers)
+
 if not high_vram:
     # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
     DynamicSwapInstaller.install_model(transformer, device=gpu)
@@ -161,7 +226,13 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers):
+    # Apply LoRA if specified
+    if (lora_file and lora_file.strip()) or (lora_url and lora_url.strip()):
+        temp_transformer = apply_lora_to_model(transformer, lora_file, lora_url, lora_is_diffusers)
+    else:
+        temp_transformer = transformer
+
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -173,7 +244,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         # Clean GPU
         if not high_vram:
             unload_complete_models(
-                text_encoder, text_encoder_2, image_encoder, vae, transformer
+                text_encoder, text_encoder_2, image_encoder, vae, temp_transformer
             )
 
         # Text encoding
@@ -228,11 +299,11 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         # Dtype
 
-        llama_vec = llama_vec.to(transformer.dtype)
-        llama_vec_n = llama_vec_n.to(transformer.dtype)
-        clip_l_pooler = clip_l_pooler.to(transformer.dtype)
-        clip_l_pooler_n = clip_l_pooler_n.to(transformer.dtype)
-        image_encoder_last_hidden_state = image_encoder_last_hidden_state.to(transformer.dtype)
+        llama_vec = llama_vec.to(temp_transformer.dtype)
+        llama_vec_n = llama_vec_n.to(temp_transformer.dtype)
+        clip_l_pooler = clip_l_pooler.to(temp_transformer.dtype)
+        clip_l_pooler_n = clip_l_pooler_n.to(temp_transformer.dtype)
+        image_encoder_last_hidden_state = image_encoder_last_hidden_state.to(temp_transformer.dtype)
 
         # Sampling
 
@@ -274,12 +345,12 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if not high_vram:
                 unload_complete_models()
-                move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+                move_model_to_device_with_memory_preservation(temp_transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
 
             if use_teacache:
-                transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
+                temp_transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
             else:
-                transformer.initialize_teacache(enable_teacache=False)
+                temp_transformer.initialize_teacache(enable_teacache=False)
 
             def callback(d):
                 preview = d['denoised']
@@ -300,7 +371,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 return
 
             generated_latents = sample_hunyuan(
-                transformer=transformer,
+                transformer=temp_transformer,
                 sampler='unipc',
                 width=width,
                 height=height,
@@ -337,7 +408,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
             if not high_vram:
-                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                offload_model_from_device_for_memory_preservation(temp_transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
 
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
@@ -369,14 +440,14 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         if not high_vram:
             unload_complete_models(
-                text_encoder, text_encoder_2, image_encoder, vae, transformer
+                text_encoder, text_encoder_2, image_encoder, vae, temp_transformer
             )
 
     stream.output_queue.push(('end', None))
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -384,7 +455,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers)
 
     output_filename = None
 
@@ -426,6 +497,12 @@ with block:
             example_quick_prompts = gr.Dataset(samples=quick_prompts, label='Quick List', samples_per_page=1000, components=[prompt])
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
+            # Add LoRA inputs
+            with gr.Group(label="LoRA Settings"):
+                lora_file = gr.Textbox(label="LoRA File Path", value="", info="Local path to LoRA file")
+                lora_url = gr.Textbox(label="LoRA URL", value="", info="URL to download LoRA file")
+                lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
+
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
@@ -457,7 +534,7 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url, lora_is_diffusers]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 

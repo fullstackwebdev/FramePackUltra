@@ -86,7 +86,7 @@ image_encoder = SiglipVisionModel.from_pretrained(
 
 
 # Use the specific snapshot hash from your directory
-transformer_path = '/home/comf2/FramePack/hf_download/hub/models--lllyasviel--FramePackI2V_HY/snapshots/86cef4396041b6002c957852daac4c91aaa47c79'
+transformer_path = '/models--lllyasviel--FramePackI2V_HY/snapshots/86cef4396041b6002c957852daac4c91aaa47c79'
 
 # Then load the model
 transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
