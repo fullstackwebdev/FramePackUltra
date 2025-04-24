@@ -1073,9 +1073,12 @@ quick_prompts = [
 quick_prompts = [[x] for x in quick_prompts]
 
 
+
+
+
+
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
-lora_values = []  # State to hold LoRA values
 with block:
     gr.Markdown('# FramePack')
     with gr.Row():
@@ -1085,40 +1088,15 @@ with block:
             example_quick_prompts = gr.Dataset(samples=quick_prompts, label='Quick List', samples_per_page=1000, components=[prompt])
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             # Add LoRA inputs
             gr.Markdown("## LoRA Settings")
             with gr.Group():
                 # Get LoRA files from configured directories
                 lora_names, lora_paths = get_lora_files()
-                
-                # Create a multi-select dropdown for LoRAs
                 lora_dropdown = gr.Dropdown(
-                    label=f"Select LoRAs from {', '.join(LORA_DIRS)}", 
+                    label=f"Select LoRA from {', '.join(LORA_DIRS)}", 
                     choices=lora_names if lora_names else ["No .safetensors files found in LoRA directories"],
                     value=None,
-                    multiselect=True,  # Allow selecting multiple LoRAs
                     type="value"
                 )
                 
@@ -1126,73 +1104,19 @@ with block:
                 gr.Markdown("Alternatively, provide a URL to download a LoRA file")
                 lora_url = gr.Textbox(label="LoRA URL", value="")
 
-                # Create a container for dynamic sliders
-                with gr.Group(visible=False) as lora_weights_container:
-                    gr.Markdown("## Selected LoRA Weights")
-                    lora_weights_components = {}
-                    
-                    # Create sliders for all possible LoRAs but initially hide them
-                    if lora_names:
-                        for lora_name in lora_names:
-                            display_name = os.path.splitext(lora_name)[0]
-                            with gr.Group(visible=False) as slider_group:
-                                lora_slider = gr.Slider(
-                                    label=f"{display_name}", 
-                                    minimum=0.0, 
-                                    maximum=1.0, 
-                                    value=1.0, 
-                                    step=0.01
-                                )
-                                # Store both the slider and its container group
-                                lora_weights_components[lora_name] = {
-                                    "slider": lora_slider,
-                                    "group": slider_group
-                                }
-                    else:
-                        gr.Markdown("No LoRA files found in directories")
-                
-                # Function to update slider visibility based on dropdown selection
-                def update_lora_sliders(selected_loras):
-                    if not selected_loras or len(selected_loras) == 0:
-                        return [gr.update(visible=False)] + [gr.update(visible=False) for _ in lora_weights_components]
-                    
-                    updates = [gr.update(visible=True)]  # First update is for the container
-                    
-                    for lora_name in lora_weights_components:
-                        if lora_name in selected_loras:
-                            updates.append(gr.update(visible=True))
-                        else:
-                            updates.append(gr.update(visible=False))
-                            
-                    return updates
-                
-                # Add the change event to the dropdown
-                output_components = [lora_weights_container] + [comp["group"] for comp in lora_weights_components.values()]
-                lora_dropdown.change(
-                    fn=update_lora_sliders, 
-                    inputs=[lora_dropdown], 
-                    outputs=output_components
-                )
-
-                # Function to collect selected LoRA weights for processing
-                def get_lora_weights(selected_loras, **sliders):
-                    if not selected_loras:
-                        return []
-                    
-                    weights = []
-                    for lora in selected_loras:
-                        lora_name = os.path.splitext(lora)[0]
-                        if lora_name in sliders and sliders[lora_name] is not None:
-                            weights.append((lora, sliders[lora_name]))
-                        else:
-                            weights.append((lora, 1.0))  # Default weight
-                    
-                    return weights
-    
-
-
-
-    
+            # Add LoRA weight sliders
+            gr.Markdown("## LoRA Weights")
+            lora_weights_components = []
+            
+            # Get existing LoRA files and create sliders for each
+            if lora_names:
+                for lora_name in lora_names:
+                    # Create a slider for each LoRA file
+                    display_name = os.path.splitext(lora_name)[0]
+                    lora_slider = gr.Slider(label=f"{display_name}", minimum=0.0, maximum=1.0, value=1.0, step=0.01)
+                    lora_weights_components.append(lora_slider)
+            else:
+                gr.Markdown("No LoRA files found in directories")
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
@@ -1227,12 +1151,14 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    # Modify the inputs list to include lora_weights_components
+    # Create the list of inputs for the process function
+    # Base inputs
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url]
-    # Add the lora weight components to the inputs list
-    if lora_weights_components:
-        ips.extend(lora_weights_components)
-        
+    
+    # Add the slider components (not their values)
+    ips.extend(lora_weights_components)
+    
+    # Connect the start button to the process function
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
@@ -1243,3 +1169,16 @@ block.launch(
     share=args.share,
     inbrowser=args.inbrowser,
 )
+
+
+
+
+
+
+
+
+
+
+
+
+
