@@ -1013,36 +1013,17 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     global stream
     assert input_image is not None, 'No input image!'
 
-    # Handle LoRA selection from dropdown
-    selected_lora_file = None
-    if lora_dropdown:
-        # Find the corresponding full path
-        _, lora_paths = get_lora_files()
-        for path in lora_paths:
-            if os.path.basename(path) == lora_dropdown:
-                selected_lora_file = path
-                print(f"Selected LoRA from dropdown: {selected_lora_file}")
-                break
-    else:
-        selected_lora_file = lora_file
-        if selected_lora_file:
-            print(f"Using uploaded LoRA: {selected_lora_file}")
-
     # Display a message about LoRA usage
-    lora_message = ""
-    if selected_lora_file:
-        lora_name = os.path.basename(selected_lora_file)
-        lora_message = f"Using LoRA: {lora_name}"
-    elif lora_url and lora_url.strip():
-        lora_message = f"Using LoRA from URL: {lora_url}"
+    if lora_values:
+        lora_message = f"Using {len(lora_values)//2} LoRAs with weights"
     else:
-        lora_message = "No LoRA selected"
+        lora_message = "No LoRAs selected"
 
     yield None, None, lora_message, '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, selected_lora_file, lora_url, lora_values)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values)
 
     output_filename = None
 
@@ -1189,9 +1170,9 @@ with block:
         gpu_memory_preservation = args[10]
         use_teacache = args[11]
         mp4_crf = args[12]
-        selected_loras = args[13]  
-        lora_file = args[14]  
-        lora_url = args[15]   
+        selected_loras = args[13]  # This is the dropdown selection
+        lora_file_path = args[14]  # This is the uploaded file
+        lora_url_text = args[15]   # This is the URL text
         
         # Get weight values for selected LoRAs
         lora_values = []
@@ -1216,12 +1197,6 @@ with block:
         for result in process(input_image, prompt, n_prompt, seed, total_second_length, 
                             latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, 
                             use_teacache, mp4_crf, *lora_values):
-            yield result
-        
-        # Call the original process function with all parameters
-        for result in process(input_image, prompt, n_prompt, seed, total_second_length, 
-                            latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, 
-                            use_teacache, mp4_crf, lora_file, lora_url, lora_weights):
             yield result
     
     # Basic input parameters
