@@ -9,6 +9,7 @@ LORA_DIR = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file_
 
 # Define additional LoRA directories to scan here
 LORA_DIRS = [
+    "/workspace/lora",
     LORA_DIR,  # Primary directory
     "./lora",  # Local directory as fallback
     # Add more directories as needed
@@ -65,12 +66,13 @@ print(f'High-VRAM Mode: {high_vram}')
 
 
 def get_lora_files():
-    """Get all .safetensors files in the configured LoRA directories"""
+    print(f"Get all .safetensors files in the configured LoRA directories")
     lora_files = []
     lora_paths = []
     
     # Scan all directories in LORA_DIRS
     for lora_dir in LORA_DIRS:
+        print(f"Scanning directory: {lora_dir}")
         # Create directory if it doesn't exist
         os.makedirs(lora_dir, exist_ok=True)
         
@@ -88,6 +90,10 @@ def get_lora_files():
         print(f"No .safetensors files found in any of the LoRA directories: {LORA_DIRS}")
     else:
         print(f"Found {len(lora_files)} LoRA files in directories: {LORA_DIRS}")
+        # Print the found files
+        for file in lora_files:
+            print(f" - {file}")
+
         
     # Return list of files with just filenames for display but full paths as values
     return lora_files, lora_paths
