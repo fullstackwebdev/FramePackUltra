@@ -5,13 +5,11 @@ import glob
 import requests
 from urllib.parse import urlparse
 
-
-LORA_DIR = "./lora"  # Default directory for LoRA files
+LORA_DIR = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './lora')))
 
 # Define additional LoRA directories to scan here
 LORA_DIRS = [
     LORA_DIR,  # Primary directory
-    "/workspace/lora",  # Another common directory
     "./lora",  # Local directory as fallback
     # Add more directories as needed
 ]
