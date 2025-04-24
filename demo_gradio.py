@@ -39,7 +39,7 @@ from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_pro
 from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
-from diffusers_helper.lora_utils import load_lora
+from diffusers_helper.lora_utils import load_lora, set_adapters
 
 
 parser = argparse.ArgumentParser()
@@ -298,21 +298,32 @@ if args.lora_url:
     print(f"Using downloaded LoRA: {lora_name}")
     transformer = load_lora(transformer, lora_path, lora_name)
 elif args.lora:
-    lora = args.lora
-    # If just a filename was provided, check in all LoRA directories
-    if os.path.dirname(lora) == "":
-        found = False
-        for dir_path in LORA_DIRS:
-            full_path = os.path.join(dir_path, lora)
-            if os.path.exists(full_path):
-                lora = full_path
-                found = True
-                break
-        if not found:
-            print(f"Warning: LoRA file {lora} not found in any of the LoRA directories")
-    lora_path, lora_name = os.path.split(lora)
-    print(f"Loading local LoRA: {lora_name} from {lora_path}")
-    transformer = load_lora(transformer, lora_path, lora_name)
+    # lora = args.lora
+    # # If just a filename was provided, check in all LoRA directories
+    # if os.path.dirname(lora) == "":
+    #     found = False
+    #     for dir_path in LORA_DIRS:
+    #         full_path = os.path.join(dir_path, lora)
+    #         if os.path.exists(full_path):
+    #             lora = full_path
+    #             found = True
+    #             break
+    #     if not found:
+    #         print(f"Warning: LoRA file {lora} not found in any of the LoRA directories")
+    # lora_path, lora_name = os.path.split(lora)
+    # print(f"Loading local LoRA: {lora_name} from {lora_path}")
+    # transformer = load_lora(transformer, lora_path, lora_name)
+    lora_names = []
+    if args.lora:
+        loras = args.lora.split(',')
+        for lora in loras:
+            lora_path, lora_name = os.path.split(lora)
+            print("Loading lora", lora_name)
+            transformer = load_lora(transformer, lora_path, lora_name)
+
+            lora_names.append(lora_name.split('.')[0])
+
+
 
 if not high_vram:
     # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
@@ -330,9 +341,230 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+@torch.no_grad()
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values):
+
+    total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
+    total_latent_sections = int(max(round(total_latent_sections), 1))
+
+    job_id = generate_timestamp()
+
+    values = [value for sublist in lora_values for value in sublist]
+    print("setting loras", lora_names, values)
+    set_adapters(transformer, lora_names, values)
+
+    stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
+
+    try:
+        # Clean GPU
+        if not high_vram:
+            unload_complete_models(
+                text_encoder, text_encoder_2, image_encoder, vae, transformer
+            )
+
+        # Text encoding
+
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
+
+        if not high_vram:
+            fake_diffusers_current_device(text_encoder, gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
+            load_model_as_complete(text_encoder_2, target_device=gpu)
+
+        llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+
+        if cfg == 1:
+            llama_vec_n, clip_l_pooler_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_l_pooler)
+        else:
+            llama_vec_n, clip_l_pooler_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+
+        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
+        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=512)
+
+        # Processing input image
+
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image processing ...'))))
+
+        H, W, C = input_image.shape
+        height, width = find_nearest_bucket(H, W, resolution=640)
+        input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
+
+        Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
+
+        input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
+        input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
+
+        # VAE encoding
+
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
+
+        if not high_vram:
+            load_model_as_complete(vae, target_device=gpu)
+
+        start_latent = vae_encode(input_image_pt, vae)
+
+        # CLIP Vision
+
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
+
+        if not high_vram:
+            load_model_as_complete(image_encoder, target_device=gpu)
+
+        image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
+        image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
+
+        # Dtype
+
+        llama_vec = llama_vec.to(transformer.dtype)
+        llama_vec_n = llama_vec_n.to(transformer.dtype)
+        clip_l_pooler = clip_l_pooler.to(transformer.dtype)
+        clip_l_pooler_n = clip_l_pooler_n.to(transformer.dtype)
+        image_encoder_last_hidden_state = image_encoder_last_hidden_state.to(transformer.dtype)
+
+        # Sampling
+
+        stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Start sampling ...'))))
+
+        rnd = torch.Generator("cpu").manual_seed(seed)
+        num_frames = latent_window_size * 4 - 3
+
+        history_latents = torch.zeros(size=(1, 16, 1 + 2 + 16, height // 8, width // 8), dtype=torch.float32).cpu()
+        history_pixels = None
+        total_generated_latent_frames = 0
+
+        latent_paddings = reversed(range(total_latent_sections))
+
+        if total_latent_sections > 4:
+            # In theory the latent_paddings should follow the above sequence, but it seems that duplicating some
+            # items looks better than expanding it when total_latent_sections > 4
+            # One can try to remove below trick and just
+            # use `latent_paddings = list(reversed(range(total_latent_sections)))` to compare
+            latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
+
+        for latent_padding in latent_paddings:
+            is_last_section = latent_padding == 0
+            latent_padding_size = latent_padding * latent_window_size
+
+            if stream.input_queue.top() == 'end':
+                stream.output_queue.push(('end', None))
+                return
+
+            print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
+
+            indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
+            clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
+            clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
+
+            clean_latents_pre = start_latent.to(history_latents)
+            clean_latents_post, clean_latents_2x, clean_latents_4x = history_latents[:, :, :1 + 2 + 16, :, :].split([1, 2, 16], dim=2)
+            clean_latents = torch.cat([clean_latents_pre, clean_latents_post], dim=2)
+
+            if not high_vram:
+                unload_complete_models()
+                move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+
+            if use_teacache:
+                transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
+            else:
+                transformer.initialize_teacache(enable_teacache=False)
+
+            def callback(d):
+                preview = d['denoised']
+                preview = vae_decode_fake(preview)
+
+                preview = (preview * 255.0).detach().cpu().numpy().clip(0, 255).astype(np.uint8)
+                preview = einops.rearrange(preview, 'b c t h w -> (b h) (t w) c')
+
+                if stream.input_queue.top() == 'end':
+                    stream.output_queue.push(('end', None))
+                    raise KeyboardInterrupt('User ends the task.')
+
+                current_step = d['i'] + 1
+                percentage = int(100.0 * current_step / steps)
+                hint = f'Sampling {current_step}/{steps}'
+                desc = f'Total generated frames: {int(max(0, total_generated_latent_frames * 4 - 3))}, Video length: {max(0, (total_generated_latent_frames * 4 - 3) / 30) :.2f} seconds (FPS-30). The video is being extended now ...'
+                stream.output_queue.push(('progress', (preview, desc, make_progress_bar_html(percentage, hint))))
+                return
+
+            generated_latents = sample_hunyuan(
+                transformer=transformer,
+                sampler='unipc',
+                width=width,
+                height=height,
+                frames=num_frames,
+                real_guidance_scale=cfg,
+                distilled_guidance_scale=gs,
+                guidance_rescale=rs,
+                # shift=3.0,
+                num_inference_steps=steps,
+                generator=rnd,
+                prompt_embeds=llama_vec,
+                prompt_embeds_mask=llama_attention_mask,
+                prompt_poolers=clip_l_pooler,
+                negative_prompt_embeds=llama_vec_n,
+                negative_prompt_embeds_mask=llama_attention_mask_n,
+                negative_prompt_poolers=clip_l_pooler_n,
+                device=gpu,
+                dtype=torch.bfloat16,
+                image_embeddings=image_encoder_last_hidden_state,
+                latent_indices=latent_indices,
+                clean_latents=clean_latents,
+                clean_latent_indices=clean_latent_indices,
+                clean_latents_2x=clean_latents_2x,
+                clean_latent_2x_indices=clean_latent_2x_indices,
+                clean_latents_4x=clean_latents_4x,
+                clean_latent_4x_indices=clean_latent_4x_indices,
+                callback=callback,
+            )
+
+            if is_last_section:
+                generated_latents = torch.cat([start_latent.to(generated_latents), generated_latents], dim=2)
+
+            total_generated_latent_frames += int(generated_latents.shape[2])
+            history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
+
+            if not high_vram:
+                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=gpu)
+
+            real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
+
+            if history_pixels is None:
+                history_pixels = vae_decode(real_history_latents, vae).cpu()
+            else:
+                section_latent_frames = (latent_window_size * 2 + 1) if is_last_section else (latent_window_size * 2)
+                overlapped_frames = latent_window_size * 4 - 3
+
+                current_pixels = vae_decode(real_history_latents[:, :, :section_latent_frames], vae).cpu()
+                history_pixels = soft_append_bcthw(current_pixels, history_pixels, overlapped_frames)
+
+            if not high_vram:
+                unload_complete_models()
+
+            output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
+
+            save_bcthw_as_mp4(history_pixels, output_filename, fps=30, crf=mp4_crf)
+
+            print(f'Decoded. Current latent shape {real_history_latents.shape}; pixel shape {history_pixels.shape}')
+
+            stream.output_queue.push(('file', output_filename))
+
+            if is_last_section:
+                break
+    except:
+        traceback.print_exc()
+
+        if not high_vram:
+            unload_complete_models(
+                text_encoder, text_encoder_2, image_encoder, vae, transformer
+            )
+
+    stream.output_queue.push(('end', None))
+    return
+
+
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url):
+def worker3(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url):
     # Track the device explicitly
     device = gpu  # Using the gpu variable that's already defined in your code
     
@@ -777,7 +1009,7 @@ def worker3(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -810,7 +1042,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, selected_lora_file, lora_url)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, selected_lora_file, lora_url, lora_values)
 
     output_filename = None
 
@@ -843,6 +1075,7 @@ quick_prompts = [[x] for x in quick_prompts]
 
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
+lora_values = []  # State to hold LoRA values
 with block:
     gr.Markdown('# FramePack')
     with gr.Row():
@@ -869,6 +1102,21 @@ with block:
                 lora_url = gr.Textbox(label="LoRA URL", value="")
                 # Remove lora_is_diffusers checkbox as it's not used by the actual load_lora function
                 # lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
+
+            # Add after the lora_url textbox but before the Row with buttons
+            gr.Markdown("## LoRA Weights")
+            lora_weights_components = []
+
+            # Get existing LoRA files and create sliders for each
+            if lora_names:
+                for lora_name in lora_names:
+                    # Create a slider for each LoRA file
+                    # Strip the extension for display but keep it for the ID
+                    display_name = os.path.splitext(lora_name)[0]
+                    lora_slider = gr.Slider(label=f"{display_name}", minimum=0.0, maximum=1.0, value=1.0, step=0.01)
+                    lora_weights_components.append(lora_slider)
+            else:
+                gr.Markdown("No LoRA files found in directories")
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
@@ -903,7 +1151,12 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
+    # Modify the inputs list to include lora_weights_components
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url]
+    # Add the lora weight components to the inputs list
+    if lora_weights_components:
+        ips.extend(lora_weights_components)
+        
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
