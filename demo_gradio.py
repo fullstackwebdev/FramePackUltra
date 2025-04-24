@@ -11,6 +11,7 @@ LORA_DIR = "./lora"  # Default directory for LoRA files
 # Define additional LoRA directories to scan here
 LORA_DIRS = [
     LORA_DIR,  # Primary directory
+    "/workspace/lora",  # Another common directory
     "./lora",  # Local directory as fallback
     # Add more directories as needed
 ]
