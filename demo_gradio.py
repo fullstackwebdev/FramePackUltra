@@ -144,7 +144,7 @@ def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_dif
                 
             lora_path, lora_name = os.path.split(lora_file)
             print(f"Loading LoRA: {lora_name}")
-            return load_lora(transformer_model, lora_path, lora_name, is_diffusers_format)
+            return load_lora(transformer_model, lora_path, lora_name)
         except Exception as e:
             print(f"Error loading LoRA: {e}")
             traceback.print_exc()
