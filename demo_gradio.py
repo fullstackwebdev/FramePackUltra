@@ -185,7 +185,7 @@ def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_dif
             lora_model = load_lora(transformer_model, lora_path, lora_name)
             
             # Ensure the modified model is on the correct device
-            lora_model.to(device)
+            # lora_model.to(device)
             
             return lora_model
         except Exception as e:
