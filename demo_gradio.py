@@ -1072,11 +1072,6 @@ quick_prompts = [
 ]
 quick_prompts = [[x] for x in quick_prompts]
 
-
-
-
-
-
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
 with block:
@@ -1097,26 +1092,55 @@ with block:
                     label=f"Select LoRA from {', '.join(LORA_DIRS)}", 
                     choices=lora_names if lora_names else ["No .safetensors files found in LoRA directories"],
                     value=None,
+                    multiselect=True,  # Enable multi-select
                     type="value"
                 )
                 
                 lora_file = gr.File(label="Or upload a LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath")
                 gr.Markdown("Alternatively, provide a URL to download a LoRA file")
                 lora_url = gr.Textbox(label="LoRA URL", value="")
-
-            # Add LoRA weight sliders
-            gr.Markdown("## LoRA Weights")
-            lora_weights_components = []
             
-            # Get existing LoRA files and create sliders for each
-            if lora_names:
-                for lora_name in lora_names:
-                    # Create a slider for each LoRA file
-                    display_name = os.path.splitext(lora_name)[0]
-                    lora_slider = gr.Slider(label=f"{display_name}", minimum=0.0, maximum=1.0, value=1.0, step=0.01)
-                    lora_weights_components.append(lora_slider)
-            else:
-                gr.Markdown("No LoRA files found in directories")
+            # Add weight sliders container that updates dynamically
+            with gr.Group() as lora_weights_container:
+                gr.Markdown("## LoRA Weights")
+                
+                # Pre-create all sliders but hide them initially
+                lora_slider_groups = []
+                lora_sliders = {}
+                
+                if lora_names:
+                    for lora_name in lora_names:
+                        # Create a container for each slider
+                        with gr.Group(visible=False) as slider_group:
+                            name = os.path.splitext(lora_name)[0]
+                            slider = gr.Slider(label=f"{name}", minimum=0.0, maximum=1.0, value=1.0, step=0.01)
+                            lora_sliders[lora_name] = slider
+                            lora_slider_groups.append(slider_group)
+                else:
+                    gr.Markdown("No LoRA files found in directories")
+                
+                # Function to update slider visibility based on dropdown selection
+                def update_lora_visibility(selected_loras):
+                    # Default all groups to invisible
+                    updates = [gr.update(visible=False) for _ in lora_slider_groups]
+                    
+                    # If no LoRAs selected, return all invisible
+                    if not selected_loras:
+                        return updates
+                    
+                    # Make selected LoRAs visible
+                    for i, lora_name in enumerate(lora_names):
+                        if lora_name in selected_loras:
+                            updates[i] = gr.update(visible=True)
+                    
+                    return updates
+                
+                # Connect the dropdown to update sliders visibility
+                lora_dropdown.change(
+                    fn=update_lora_visibility,
+                    inputs=[lora_dropdown],
+                    outputs=lora_slider_groups
+                )
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
@@ -1124,21 +1148,16 @@ with block:
 
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
-
-                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)  # Not used
+                n_prompt = gr.Textbox(label="Negative Prompt", value="", visible=False)
                 seed = gr.Number(label="Seed", value=31337, precision=0)
-
                 total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
-                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change
+                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1, info='Changing this value is not recommended.')
-
-                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)  # Should not change
+                cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)
                 gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.01, info='Changing this value is not recommended.')
-                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)  # Should not change
-
+                rs = gr.Slider(label="CFG Re-Scale", minimum=0.0, maximum=1.0, value=0.0, step=0.01, visible=False)
                 gpu_memory_preservation = gr.Slider(label="GPU Inference Preserved Memory (GB) (larger means slower)", minimum=6, maximum=128, value=6, step=0.1, info="Set this number to a larger value if you encounter OOM. Larger value causes slower speed.")
-
-                mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs. ")
+                mp4_crf = gr.Slider(label="MP4 Compression", minimum=0, maximum=100, value=16, step=1, info="Lower means better quality. 0 is uncompressed. Change to 16 if you get black outputs.")
 
         with gr.Column():
             preview_image = gr.Image(label="Next Latents", height=200, visible=False)
@@ -1151,17 +1170,45 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    # Create the list of inputs for the process function
-    # Base inputs
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_dropdown, lora_file, lora_url]
+    # Modify process function to collect LoRA weights
+    def process_with_loras(*args):
+        # Extract standard parameters
+        standard_args = args[:16]  # The first 16 arguments
+        
+        # Get selected LoRAs from the dropdown
+        selected_loras = args[13]  # lora_dropdown value
+        
+        # Get weight values for selected LoRAs
+        lora_weights = []
+        if selected_loras:
+            for lora_name in selected_loras:
+                if lora_name in lora_sliders:
+                    # Get actual full path for this lora file
+                    lora_path = None
+                    for path in lora_paths:
+                        if os.path.basename(path) == lora_name:
+                            lora_path = path
+                            break
+                    
+                    if lora_path:
+                        lora_weights.append((lora_path, lora_sliders[lora_name].value))
+        
+        # Call the original process function with all parameters
+        return process(*standard_args, lora_weights)
     
-    # Add the slider components (not their values)
-    ips.extend(lora_weights_components)
+    # Basic input parameters
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, 
+           steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, 
+           lora_dropdown, lora_file, lora_url]
     
-    # Connect the start button to the process function
-    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button])
+    # Connect the start button to the modified process function
+    start_button.click(
+        fn=process_with_loras, 
+        inputs=ips,
+        outputs=[result_video, preview_image, lora_status, progress_bar, start_button, end_button]
+    )
+    
     end_button.click(fn=end_process)
-
 
 block.launch(
     server_name=args.server,
@@ -1169,16 +1216,3 @@ block.launch(
     share=args.share,
     inbrowser=args.inbrowser,
 )
-
-
-
-
-
-
-
-
-
-
-
-
-
