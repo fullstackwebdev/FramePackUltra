@@ -519,10 +519,12 @@ with block:
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
             # Add LoRA inputs
-            with gr.Group(label="LoRA Settings"):
+            gr.Markdown("### LoRA Settings")
+            with gr.Group():
                 lora_file = gr.File(label="LoRA File", file_types=[".safetensors", ".pt", ".bin"], file_count="single", type="filepath", info="Upload a LoRA file")
                 lora_url = gr.Textbox(label="LoRA URL", value="", info="Alternatively, provide a URL to download LoRA file")
                 lora_is_diffusers = gr.Checkbox(label="LoRA is in Diffusers format", value=False)
+
 
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
