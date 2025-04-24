@@ -135,7 +135,7 @@ def download_lora_from_url(url, download_dir=None):
     return local_path
 
 
-def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_diffusers_format=False):
+def apply_lora_to_model2(transformer_model, lora_file=None, lora_url=None, is_diffusers_format=False):
     """Apply LoRA to transformer model from file or URL"""
     if lora_url and lora_url.strip():
         try:
@@ -160,6 +160,39 @@ def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_dif
     
     return transformer_model
 
+def apply_lora_to_model(transformer_model, lora_file=None, lora_url=None, is_diffusers_format=False):
+    """Apply LoRA to transformer model from file or URL"""
+    # Get the device of the transformer model
+    device = next(transformer_model.parameters()).device
+    
+    if lora_url and lora_url.strip():
+        try:
+            lora_file = download_lora_from_url(lora_url)
+        except Exception as e:
+            print(f"Error downloading LoRA from URL: {e}")
+            return transformer_model
+    
+    if lora_file:
+        try:
+            # Handle potential empty string vs None difference
+            if isinstance(lora_file, str) and not lora_file.strip():
+                return transformer_model
+                
+            lora_path, lora_name = os.path.split(lora_file)
+            print(f"Loading LoRA: {lora_name} to device {device}")
+            
+            # Load LoRA and ensure it's on the same device as the model
+            lora_model = load_lora(transformer_model, lora_path, lora_name)
+            
+            # Ensure the modified model is on the correct device
+            lora_model.to(device)
+            
+            return lora_model
+        except Exception as e:
+            print(f"Error loading LoRA: {e}")
+            traceback.print_exc()
+    
+    return transformer_model
 
 ###########################################################
 ###########################################################
@@ -299,11 +332,17 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker2(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, lora_file, lora_url):
+    # Track the device explicitly
+    device = gpu  # Using the gpu variable that's already defined in your code
+    
     # Apply LoRA if specified
     if lora_file or (lora_url and lora_url.strip()):
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Loading LoRA ...'))))
         temp_transformer = apply_lora_to_model(transformer, lora_file, lora_url)
+        # Ensure the transformer is on the correct device after LoRA application
+        temp_transformer = temp_transformer.to(device)
+        print(f"LoRA transformer device: {next(temp_transformer.parameters()).device}")
     else:
         temp_transformer = transformer
 
@@ -523,7 +562,7 @@ def worker2(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker3(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
