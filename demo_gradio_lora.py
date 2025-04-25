@@ -17,7 +17,7 @@ from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
 from transformers import LlamaModel, CLIPTextModel, LlamaTokenizerFast, CLIPTokenizer
 from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode, vae_decode_fake
-from diffusers_helper.load_lora import load_lora
+from diffusers_helper import lora_utils
 from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
@@ -38,6 +38,9 @@ parser.add_argument("--lora", type=str, default=None, help="Lora path")
 parser.add_argument("--lora_is_diffusers", action='store_true', help="Lora is diffusers format")
 args = parser.parse_args()
 
+
+
+
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
 
@@ -48,17 +51,80 @@ high_vram = free_mem_gb > 60
 
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
+###########################################################
 
-text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
-text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
-tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
-tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
+MODELS_DIR = "./hf_download/models/"
+os.environ['HF_HOME'] = MODELS_DIR
 
-feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
-image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
+# Define model paths
+hunyuan_path = os.path.join(MODELS_DIR, "hunyuanvideo-community", "HunyuanVideo")
+flux_path = os.path.join(MODELS_DIR, "lllyasviel", "flux_redux_bfl")
+framepack_path = os.path.join(MODELS_DIR, "lllyasviel", "FramePackI2V_HY")
+
+print(f"Loading text_encoder from: {os.path.join(hunyuan_path, 'text_encoder')}")
+# Load models from local paths - with trusted_patterns to avoid repo_id issues
+text_encoder = LlamaModel.from_pretrained(
+    os.path.join(hunyuan_path, "text_encoder"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
+).cpu()
+
+print(f"Loading text_encoder_2 from: {os.path.join(hunyuan_path, 'text_encoder_2')}")
+text_encoder_2 = CLIPTextModel.from_pretrained(
+    os.path.join(hunyuan_path, "text_encoder_2"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
+).cpu()
+
+print(f"Loading tokenizer from: {os.path.join(hunyuan_path, 'tokenizer')}")
+tokenizer = LlamaTokenizerFast.from_pretrained(
+    os.path.join(hunyuan_path, "tokenizer"),
+    trust_remote_code=True
+)
+
+print(f"Loading tokenizer_2 from: {os.path.join(hunyuan_path, 'tokenizer_2')}")
+tokenizer_2 = CLIPTokenizer.from_pretrained(
+    os.path.join(hunyuan_path, "tokenizer_2"),
+    trust_remote_code=True
+)
+
+print(f"Loading vae from: {os.path.join(hunyuan_path, 'vae')}")
+vae = AutoencoderKLHunyuanVideo.from_pretrained(
+    os.path.join(hunyuan_path, "vae"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
+).cpu()
+
+print(f"Loading feature_extractor from: {os.path.join(flux_path, 'feature_extractor')}")
+feature_extractor = SiglipImageProcessor.from_pretrained(
+    os.path.join(flux_path, "feature_extractor"),
+    trust_remote_code=True
+)
+
+print(f"Loading image_encoder from: {os.path.join(flux_path, 'image_encoder')}")
+image_encoder = SiglipVisionModel.from_pretrained(
+    os.path.join(flux_path, "image_encoder"),
+    trust_remote_code=True,
+    torch_dtype=torch.float16
+).cpu()
+
+print(f"Loading transformer from: {framepack_path}")
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
+    framepack_path,
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16
+).cpu()
+
+
+############################
+
+
+vae.eval()
+text_encoder.eval()
+text_encoder_2.eval()
+image_encoder.eval()
+transformer.eval()
 
 vae.eval()
 text_encoder.eval()
@@ -84,11 +150,15 @@ text_encoder_2.requires_grad_(False)
 image_encoder.requires_grad_(False)
 transformer.requires_grad_(False)
 
+
+lora_names = []
 if args.lora:
-    lora = args.lora
-    lora_path, lora_name = os.path.split(lora)
-    print("Loading lora")
-    transformer = load_lora(transformer, lora_path, lora_name, args.lora_is_diffusers)
+    loras = args.lora.split(',')
+    for lora in loras:
+        lora_path, lora_name = os.path.split(lora)
+        print("Loading lora", lora_name)
+        transformer = lora_utils.load_lora(transformer, lora_path, lora_name)
+
 
 if not high_vram:
     # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
@@ -108,11 +178,16 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
     job_id = generate_timestamp()
+
+    # Lora madness
+    values = [value for sublist in lora_values for value in sublist]
+    print("setting loras", lora_names, values)
+    lora_utils.set_adapters(transformer, lora_names, values)
 
     stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Starting ...'))))
 
@@ -323,7 +398,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values):
     global stream
     assert input_image is not None, 'No input image!'
 
@@ -331,7 +406,7 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values)
 
     output_filename = None
 
@@ -364,6 +439,7 @@ quick_prompts = [[x] for x in quick_prompts]
 
 css = make_progress_bar_css()
 block = gr.Blocks(css=css).queue()
+lora_values = []
 with block:
     gr.Markdown('# FramePack')
     with gr.Row():
@@ -376,6 +452,11 @@ with block:
             with gr.Row():
                 start_button = gr.Button(value="Start Generation")
                 end_button = gr.Button(value="End Generation", interactive=False)
+
+            
+            with gr.Row():
+                for lora in lora_names:
+                    lora_values.append(gr.Slider(label=lora, minimum=0.0, maximum=1.0, value=1.0, step=0.01,))
 
             with gr.Group():
                 use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
@@ -404,7 +485,7 @@ with block:
 
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
-    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
+    ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, *lora_values]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
